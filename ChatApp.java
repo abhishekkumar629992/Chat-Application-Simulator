@@ -1,163 +1,222 @@
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 
+// Enumeration for User Roles
+enum Role {
+    ADMIN, MODERATOR, REGULAR
+}
+
+// Enumeration for Message Types
+enum MessageType {
+    PUBLIC, PRIVATE, SYSTEM
+}
+
 class User {
     private String username;
     private boolean isOnline;
+    private boolean isBanned;
+    private Role role;
 
-    // Constructor
-    public User(String username) {
+    public User(String username, Role role) {
         this.username = username;
-        this.isOnline = true; // Users are online by default
+        this.role = role;
+        this.isOnline = true;
+        this.isBanned = false;
     }
 
     // Getters and Setters
-    public String getUsername() {
-        return username;
-    }
-
-    public boolean isOnline() {
-        return isOnline;
-    }
-
-    public void setOnline(boolean online) {
-        this.isOnline = online;
-    }
+    public String getUsername() { return username; }
+    public boolean isOnline() { return isOnline; }
+    public void setOnline(boolean online) { this.isOnline = online; }
+    public boolean isBanned() { return isBanned; }
+    public void setBanned(boolean banned) { this.isBanned = banned; }
+    public Role getRole() { return role; }
 }
 
 class Message {
-    private static int idCounter = 1; // Auto-incrementing ID tracker
+    private static int idCounter = 1;
     private int messageId;
     private User sender;
     private String content;
     private String timestamp;
+    private MessageType type;
+    private String recipientName; // Used for Direct Messages
 
-    // Constructor
-    public Message(User sender, String content) {
+    // Constructor for Public/System messages
+    public Message(User sender, String content, MessageType type) {
         this.messageId = idCounter++;
         this.sender = sender;
         this.content = content;
-
-        // Generate current time
-        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("hh:mm:ss a");
-        this.timestamp = LocalTime.now().format(formatter);
+        this.type = type;
+        this.recipientName = "ALL";
+        this.timestamp = LocalTime.now().format(DateTimeFormatter.ofPattern("hh:mm:ss a"));
     }
 
-    // Display message with ID
+    // Constructor for Direct Messages
+    public Message(User sender, String recipientName, String content) {
+        this.messageId = idCounter++;
+        this.sender = sender;
+        this.content = content;
+        this.type = MessageType.PRIVATE;
+        this.recipientName = recipientName;
+        this.timestamp = LocalTime.now().format(DateTimeFormatter.ofPattern("hh:mm:ss a"));
+    }
+
     public void display() {
-        System.out.println(String.format("#%03d [%s] %s: %s", 
-            messageId, timestamp, sender.getUsername(), content));
+        switch (type) {
+            case SYSTEM:
+                System.out.println(String.format("[SYSTEM] %s", content));
+                break;
+            case PRIVATE:
+                System.out.println(String.format("#%03d [%s] (DM) %s -> %s: %s", 
+                    messageId, timestamp, sender.getUsername(), recipientName, content));
+                break;
+            case PUBLIC:
+            default:
+                String prefix = (sender.getRole() != Role.REGULAR) ? "[" + sender.getRole() + "] " : "";
+                System.out.println(String.format("#%03d [%s] %s%s: %s", 
+                    messageId, timestamp, prefix, sender.getUsername(), content));
+                break;
+        }
     }
 }
 
 class ChatRoom {
     private String roomName;
-    private Message[] messages;
-    private User[] activeUsers; // New Array to track room members
-    private int messageCount;
-    private int userCount;
+    private Message[] globalMessages;
+    private User[] registeredUsers;
+    private int messageCount = 0;
+    private int userCount = 0;
 
-    // Constructor
     public ChatRoom(String roomName, int maxMessages, int maxUsers) {
         this.roomName = roomName;
-        this.messages = new Message[maxMessages];
-        this.activeUsers = new User[maxUsers];
-        this.messageCount = 0;
-        this.userCount = 0;
+        this.globalMessages = new Message[maxMessages];
+        this.registeredUsers = new User[maxUsers];
     }
 
-    // Add a user to the chatroom array
     public void registerUser(User user) {
-        if (userCount < activeUsers.length) {
-            activeUsers[userCount] = user;
-            userCount++;
-            System.out.println(">> System: " + user.getUsername() + " joined " + roomName);
-        } else {
-            System.out.println(">> System: Cannot add " + user.getUsername() + ". Room member limit reached.");
+        if (userCount >= registeredUsers.length) {
+            logSystemMessage("Failed to add " + user.getUsername() + ". Room capacity full.");
+            return;
+        }
+        registeredUsers[userCount++] = user;
+        logSystemMessage(user.getUsername() + " joined [" + roomName + "] as " + user.getRole());
+    }
+
+    // Send a message to the entire chatroom
+    public void sendPublicMessage(User sender, String text) {
+        if (!validateUser(sender)) return;
+
+        if (messageCount < globalMessages.length) {
+            globalMessages[messageCount++] = new Message(sender, text, MessageType.PUBLIC);
         }
     }
 
-    // Enhanced sendMessage method with validations
-    public void sendMessage(User user, String messageText) {
-        // Validation 1: Check if user is registered in this room
-        if (!isUserInRoom(user)) {
-            System.out.println(">> [ERROR] " + user.getUsername() + " is not a member of this room.");
+    // Send a private Direct Message (DM) to a specific user inside the array
+    public void sendDirectMessage(User sender, String recipientName, String text) {
+        if (!validateUser(sender)) return;
+
+        User recipient = findUser(recipientName);
+        if (recipient == null) {
+            System.out.println(">> [ERROR] User '" + recipientName + "' not found in this room.");
             return;
         }
 
-        // Validation 2: Check if user is online
+        if (messageCount < globalMessages.length) {
+            globalMessages[messageCount++] = new Message(sender, recipientName, text);
+        }
+    }
+
+    // Moderation Action: Kick/Ban a user
+    public void moderationKick(User admin, String targetUsername) {
+        if (admin.getRole() != Role.ADMIN && admin.getRole() != Role.MODERATOR) {
+            System.out.println(">> [DENIED] Only Admins/Moderators can kick users.");
+            return;
+        }
+
+        User target = findUser(targetUsername);
+        if (target != null) {
+            target.setBanned(true);
+            target.setOnline(false);
+            logSystemMessage(target.getUsername() + " has been banned by " + admin.getUsername());
+        }
+    }
+
+    // Helper Validations
+    private boolean validateUser(User user) {
+        if (user.isBanned()) {
+            System.out.println(">> [REJECTED] " + user.getUsername() + " is banned from this server.");
+            return false;
+        }
         if (!user.isOnline()) {
-            System.out.println(">> [ERROR] " + user.getUsername() + " cannot send message while offline.");
-            return;
+            System.out.println(">> [REJECTED] " + user.getUsername() + " is offline.");
+            return false;
         }
-
-        // Validation 3: Check storage space
-        if (messageCount < messages.length) {
-            Message msg = new Message(user, messageText);
-            messages[messageCount] = msg;
-            messageCount++;
-        } else {
-            System.out.println(">> System: Chat log history is completely full!");
-        }
+        return true;
     }
 
-    // Helper method to scan the user array
-    private boolean isUserInRoom(User targetUser) {
+    private User findUser(String username) {
         for (int i = 0; i < userCount; i++) {
-            if (activeUsers[i].getUsername().equalsIgnoreCase(targetUser.getUsername())) {
-                return true;
+            if (registeredUsers[i].getUsername().equalsIgnoreCase(username)) {
+                return registeredUsers[i];
             }
         }
-        return false;
+        return null;
     }
 
-    // Display chat history neatly
-    public void displayChat() {
-        System.out.println("\n--- " + roomName.toUpperCase() + " HISTORY ---");
-        if (messageCount == 0) {
-            System.out.println("(No messages yet)");
+    private void logSystemMessage(String text) {
+        if (messageCount < globalMessages.length) {
+            globalMessages[messageCount++] = new Message(null, text, MessageType.SYSTEM);
         }
+    }
+
+    // Display the structured logs
+    public void displayChatHistory() {
+        System.out.println("\n==============================================");
+        System.out.println("          " + roomName.toUpperCase() + " LIVE FEED          ");
+        System.out.println("==============================================");
         for (int i = 0; i < messageCount; i++) {
-            messages[i].display();
+            globalMessages[i].display();
         }
-        System.out.println("-----------------------------\n");
+        System.out.println("==============================================\n");
     }
 }
 
 public class ChatApp {
     public static void main(String[] args) {
-        // 1. Initialize room with caps: max 100 messages, max 5 users
-        ChatRoom programmingHub = new ChatRoom("Programming Hub", 100, 5);
+        // Create server instance
+        ChatRoom devSquad = new ChatRoom("Dev Squad HQ", 50, 10);
 
-        // 2. Create users
-        User alice = new User("Alice");
-        User bob = new User("Bob");
-        User charlie = new User("Charlie");
-        User intruder = new User("MaliciousHacker"); // Will test unregistered check
+        // Instantiating users with different Privilege Roles
+        User adminUser = new User("Alice", Role.ADMIN);
+        User modUser = new User("Bob", Role.MODERATOR);
+        User regularUser1 = new User("Charlie", Role.REGULAR);
+        User regularUser2 = new User("David", Role.REGULAR);
 
-        // 3. Register valid users to the chat room array
-        programmingHub.registerUser(alice);
-        programmingHub.registerUser(bob);
-        programmingHub.registerUser(charlie);
+        // Registering network profiles
+        devSquad.registerUser(adminUser);
+        devSquad.registerUser(modUser);
+        devSquad.registerUser(regularUser1);
+        devSquad.registerUser(regularUser2);
 
-        // 4. Regular conversations
-        programmingHub.sendMessage(alice, "Hello everyone!");
-        programmingHub.sendMessage(bob, "Hi Alice, what's cooking?");
+        // 1. Regular Chat flow
+        devSquad.sendPublicMessage(regularUser1, "Hey team! Is the server deployment up?");
+        devSquad.sendPublicMessage(modUser, "Yes Charlie, production pipeline looks stable.");
+
+        // 2. Testing Direct Messaging (DMs)
+        devSquad.sendDirectMessage(regularUser1, "David", "Hey bro, check your email for the secret credentials.");
+        devSquad.sendDirectMessage(regularUser2, "Charlie", "Got it, thanks!");
+
+        // 3. Toxic behavior / Moderation simulation
+        devSquad.sendPublicMessage(regularUser2, "I am going to post malicious links here!");
         
-        // 5. Test scenario: Unregistered user tries to type
-        programmingHub.sendMessage(intruder, "I want to spam this chat!"); 
+        // Admin steps in and issues a ban command
+        devSquad.moderationKick(adminUser, "David");
 
-        // 6. Test scenario: User goes offline and tries to type
-        charlie.setOnline(false);
-        System.out.println(">> System: Charlie changed status to offline.");
-        programmingHub.sendMessage(charlie, "Good morning guys!"); // Should fail
+        // Failsafe checks: Banned user tries to converse again
+        devSquad.sendPublicMessage(regularUser2, "Let me try typing again..."); 
 
-        // 7. Charlie comes back online
-        charlie.setOnline(true);
-        System.out.println(">> System: Charlie changed status to online.");
-        programmingHub.sendMessage(charlie, "Sorry, connection dropped! Good morning!");
-
-        // 8. Print out the final logs
-        programmingHub.displayChat();
+        // 4. Output the definitive centralized chat engine log
+        devSquad.displayChatHistory();
     }
 }
