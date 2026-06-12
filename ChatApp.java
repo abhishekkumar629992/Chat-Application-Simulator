@@ -1,222 +1,261 @@
-import java.time.LocalTime;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 
-// Enumeration for User Roles
-enum Role {
-    ADMIN, MODERATOR, REGULAR
+// ==========================================
+// 1. SYSTEM DOMAIN DEFINITIONS & CONSTANTS
+// ==========================================
+
+enum UserRole {
+    SYSTEM_AUTOMATION(3),
+    SERVER_ADMINISTRATOR(2),
+    COMMUNITY_MODERATOR(1),
+    STANDARD_USER(0);
+
+    private final int authorityLevel;
+    UserRole(int authorityLevel) { this.authorityLevel = authorityLevel; }
+    public int getAuthorityLevel() { return authorityLevel; }
 }
 
-// Enumeration for Message Types
-enum MessageType {
-    PUBLIC, PRIVATE, SYSTEM
+enum TargetChannel {
+    GLOBAL_BROADCAST,
+    PEER_TO_PEER_DIRECT,
+    SYSTEM_ALERT
 }
 
-class User {
-    private String username;
-    private boolean isOnline;
-    private boolean isBanned;
-    private Role role;
+/**
+ * Custom infrastructure exception designed to elegantly bubble up system errors.
+ */
+class ChatEngineException extends Exception {
+    public ChatEngineException(String coreDiagnostics) {
+        super(">> [ENGINE EXCEPTION] " + coreDiagnostics);
+    }
+}
 
-    public User(String username, Role role) {
+// ==========================================
+// 2. DATA ENTITY IMPLEMENTATIONS (ENCAPSULATED)
+// ==========================================
+
+class UserProfile {
+    private final String clientID;
+    private final String username;
+    private final UserRole securityRole;
+    private boolean connectionStatus;
+    private boolean restrictedAccess; // Replaces 'isBanned'
+
+    public UserProfile(String username, UserRole securityRole) {
+        this.clientID = "UID-" + System.nanoTime() % 10000;
         this.username = username;
-        this.role = role;
-        this.isOnline = true;
-        this.isBanned = false;
+        this.securityRole = securityRole;
+        this.connectionStatus = true;
+        this.restrictedAccess = false;
     }
 
-    // Getters and Setters
+    // High-integrity immutable getters and state modifiers
+    public String getClientID() { return clientID; }
     public String getUsername() { return username; }
-    public boolean isOnline() { return isOnline; }
-    public void setOnline(boolean online) { this.isOnline = online; }
-    public boolean isBanned() { return isBanned; }
-    public void setBanned(boolean banned) { this.isBanned = banned; }
-    public Role getRole() { return role; }
+    public UserRole getSecurityRole() { return securityRole; }
+    public boolean isOnline() { return connectionStatus; }
+    public void setConnectionStatus(boolean status) { this.connectionStatus = status; }
+    public boolean isAccessRestricted() { return restrictedAccess; }
+    public void restrictAccess(boolean restrictionState) { this.restrictedAccess = restrictionState; }
 }
 
-class Message {
-    private static int idCounter = 1;
-    private int messageId;
-    private User sender;
-    private String content;
-    private String timestamp;
-    private MessageType type;
-    private String recipientName; // Used for Direct Messages
+class TransactionalMessage {
+    private static int sequentialIDRegistry = 100;
+    
+    private final int messageSequenceID;
+    private final UserProfile originSender;
+    private final String payloadContent;
+    private final TargetChannel transmissionChannel;
+    private final String explicitRecipient;
+    private final String operationalTimestamp;
 
-    // Constructor for Public/System messages
-    public Message(User sender, String content, MessageType type) {
-        this.messageId = idCounter++;
-        this.sender = sender;
-        this.content = content;
-        this.type = type;
-        this.recipientName = "ALL";
-        this.timestamp = LocalTime.now().format(DateTimeFormatter.ofPattern("hh:mm:ss a"));
+    // Factory pattern alternative for global system logs
+    public TransactionalMessage(String systemPayload) {
+        this.messageSequenceID = sequentialIDRegistry++;
+        this.originSender = new UserProfile("SYSTEM", UserRole.SYSTEM_AUTOMATION);
+        this.payloadContent = systemPayload;
+        this.transmissionChannel = TargetChannel.SYSTEM_ALERT;
+        this.explicitRecipient = "ALL_CLIENTS";
+        this.operationalTimestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
     }
 
-    // Constructor for Direct Messages
-    public Message(User sender, String recipientName, String content) {
-        this.messageId = idCounter++;
-        this.sender = sender;
-        this.content = content;
-        this.type = MessageType.PRIVATE;
-        this.recipientName = recipientName;
-        this.timestamp = LocalTime.now().format(DateTimeFormatter.ofPattern("hh:mm:ss a"));
+    // Explicit constructor for Public/Direct messages
+    public TransactionalMessage(UserProfile sender, String recipient, String payload, TargetChannel channel) {
+        this.messageSequenceID = sequentialIDRegistry++;
+        this.originSender = sender;
+        this.payloadContent = payload;
+        this.transmissionChannel = channel;
+        this.explicitRecipient = recipient;
+        this.operationalTimestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss.SSS"));
     }
 
-    public void display() {
-        switch (type) {
-            case SYSTEM:
-                System.out.println(String.format("[SYSTEM] %s", content));
+    public void compileOutputLog() {
+        switch (transmissionChannel) {
+            case SYSTEM_ALERT:
+                System.out.println(String.format("[%s] 📢 SYSTEM DISPATCH: %s", operationalTimestamp, payloadContent));
                 break;
-            case PRIVATE:
-                System.out.println(String.format("#%03d [%s] (DM) %s -> %s: %s", 
-                    messageId, timestamp, sender.getUsername(), recipientName, content));
+            case PEER_TO_PEER_DIRECT:
+                System.out.println(String.format("🔒 ID: #%d | [%s] (DM) %s ➔ %s: %s", 
+                    messageSequenceID, operationalTimestamp, originSender.getUsername(), explicitRecipient, payloadContent));
                 break;
-            case PUBLIC:
+            case GLOBAL_BROADCAST:
             default:
-                String prefix = (sender.getRole() != Role.REGULAR) ? "[" + sender.getRole() + "] " : "";
-                System.out.println(String.format("#%03d [%s] %s%s: %s", 
-                    messageId, timestamp, prefix, sender.getUsername(), content));
+                String roleTag = (originSender.getSecurityRole() != UserRole.STANDARD_USER) 
+                    ? "{" + originSender.getSecurityRole() + "} " : "";
+                System.out.println(String.format("🌐 ID: #%d | [%s] %s%s: %s", 
+                    messageSequenceID, operationalTimestamp, roleTag, originSender.getUsername(), payloadContent));
                 break;
         }
     }
 }
 
-class ChatRoom {
-    private String roomName;
-    private Message[] globalMessages;
-    private User[] registeredUsers;
-    private int messageCount = 0;
-    private int userCount = 0;
+// ==========================================
+// 3. SERVICE CONTROL LAYER (BUSINESS LOGIC)
+// ==========================================
 
-    public ChatRoom(String roomName, int maxMessages, int maxUsers) {
-        this.roomName = roomName;
-        this.globalMessages = new Message[maxMessages];
-        this.registeredUsers = new User[maxUsers];
+class ChatRoomManager {
+    private final String localizedNamespace;
+    private final TransactionalMessage[] messageLedger;
+    private final UserProfile[] registeredUserDirectory;
+    private int trackingMessagePointer = 0;
+    private int trackingUserPointer = 0;
+
+    public ChatRoomManager(String localizedNamespace, int messageBacklogCap, int clientDirectoryCap) {
+        this.localizedNamespace = localizedNamespace;
+        this.messageLedger = new TransactionalMessage[messageBacklogCap];
+        this.registeredUserDirectory = new UserProfile[clientDirectoryCap];
+        executeSystemBroadcast("Initialization sequence complete for server instance: " + localizedNamespace);
     }
 
-    public void registerUser(User user) {
-        if (userCount >= registeredUsers.length) {
-            logSystemMessage("Failed to add " + user.getUsername() + ". Room capacity full.");
+    public void onboardNewClient(UserProfile prospectiveClient) {
+        if (trackingUserPointer >= registeredUserDirectory.length) {
+            System.err.println(">> Infrastructure threshold breached. Refusing connection to: " + prospectiveClient.getUsername());
             return;
         }
-        registeredUsers[userCount++] = user;
-        logSystemMessage(user.getUsername() + " joined [" + roomName + "] as " + user.getRole());
+        registeredUserDirectory[trackingUserPointer++] = prospectiveClient;
+        executeSystemBroadcast(String.format("Client Profile Registered: %s assigned Security Clearance: %s", 
+            prospectiveClient.getUsername(), prospectiveClient.getSecurityRole()));
     }
 
-    // Send a message to the entire chatroom
-    public void sendPublicMessage(User sender, String text) {
-        if (!validateUser(sender)) return;
-
-        if (messageCount < globalMessages.length) {
-            globalMessages[messageCount++] = new Message(sender, text, MessageType.PUBLIC);
-        }
+    public void dispatchGlobalBroadcast(UserProfile activeSender, String outboundPayload) throws ChatEngineException {
+        assertClientIntegrity(activeSender);
+        commitToLedger(new TransactionalMessage(activeSender, "ALL", outboundPayload, TargetChannel.GLOBAL_BROADCAST));
     }
 
-    // Send a private Direct Message (DM) to a specific user inside the array
-    public void sendDirectMessage(User sender, String recipientName, String text) {
-        if (!validateUser(sender)) return;
-
-        User recipient = findUser(recipientName);
-        if (recipient == null) {
-            System.out.println(">> [ERROR] User '" + recipientName + "' not found in this room.");
-            return;
+    public void dispatchDirectPayload(UserProfile activeSender, String targetUsername, String outboundPayload) throws ChatEngineException {
+        assertClientIntegrity(activeSender);
+        UserProfile recipientNode = locateUserInDirectory(targetUsername);
+        
+        if (recipientNode == null) {
+            throw new ChatEngineException("Routing Resolution Failed. Target recipient address unreachable: " + targetUsername);
         }
-
-        if (messageCount < globalMessages.length) {
-            globalMessages[messageCount++] = new Message(sender, recipientName, text);
-        }
+        commitToLedger(new TransactionalMessage(activeSender, targetUsername, outboundPayload, TargetChannel.PEER_TO_PEER_DIRECT));
     }
 
-    // Moderation Action: Kick/Ban a user
-    public void moderationKick(User admin, String targetUsername) {
-        if (admin.getRole() != Role.ADMIN && admin.getRole() != Role.MODERATOR) {
-            System.out.println(">> [DENIED] Only Admins/Moderators can kick users.");
-            return;
+    public void invokeAdministrativeSanction(UserProfile administrativeActor, String targetUsername) throws ChatEngineException {
+        if (administrativeActor.getSecurityRole().getAuthorityLevel() < UserRole.COMMUNITY_MODERATOR.getAuthorityLevel()) {
+            throw new ChatEngineException("Security Exception. Access Denied for Action: User Isolation Protocol.");
         }
 
-        User target = findUser(targetUsername);
-        if (target != null) {
-            target.setBanned(true);
-            target.setOnline(false);
-            logSystemMessage(target.getUsername() + " has been banned by " + admin.getUsername());
+        UserProfile targetNode = locateUserInDirectory(targetUsername);
+        if (targetNode != null) {
+            targetNode.restrictAccess(true);
+            targetNode.setConnectionStatus(false);
+            executeSystemBroadcast(String.format("Security Alert: User '%s' has been network isolated by Administrator '%s'", 
+                targetNode.getUsername(), administrativeActor.getUsername()));
         }
     }
 
-    // Helper Validations
-    private boolean validateUser(User user) {
-        if (user.isBanned()) {
-            System.out.println(">> [REJECTED] " + user.getUsername() + " is banned from this server.");
-            return false;
+    // Micro-validations & Internal Array Traversals
+    private void assertClientIntegrity(UserProfile clientNode) throws ChatEngineException {
+        if (clientNode.isAccessRestricted()) {
+            throw new ChatEngineException("Access Denied: Account Token Suspended/Banned. Action Blocked for: " + clientNode.getUsername());
         }
-        if (!user.isOnline()) {
-            System.out.println(">> [REJECTED] " + user.getUsername() + " is offline.");
-            return false;
+        if (!clientNode.isOnline()) {
+            throw new ChatEngineException("I/O Operations Interrupted: Client Node is Offline: " + clientNode.getUsername());
         }
-        return true;
     }
 
-    private User findUser(String username) {
-        for (int i = 0; i < userCount; i++) {
-            if (registeredUsers[i].getUsername().equalsIgnoreCase(username)) {
-                return registeredUsers[i];
+    private UserProfile locateUserInDirectory(String targetUsername) {
+        for (int i = 0; i < trackingUserPointer; i++) {
+            if (registeredUserDirectory[i].getUsername().equalsIgnoreCase(targetUsername)) {
+                return registeredUserDirectory[i];
             }
         }
         return null;
     }
 
-    private void logSystemMessage(String text) {
-        if (messageCount < globalMessages.length) {
-            globalMessages[messageCount++] = new Message(null, text, MessageType.SYSTEM);
+    private void executeSystemBroadcast(String broadcastString) {
+        if (trackingMessagePointer < messageLedger.length) {
+            messageLedger[trackingMessagePointer++] = new TransactionalMessage(broadcastString);
         }
     }
 
-    // Display the structured logs
-    public void displayChatHistory() {
-        System.out.println("\n==============================================");
-        System.out.println("          " + roomName.toUpperCase() + " LIVE FEED          ");
-        System.out.println("==============================================");
-        for (int i = 0; i < messageCount; i++) {
-            globalMessages[i].display();
+    private void commitToLedger(TransactionalMessage fullyFormedMessage) {
+        if (trackingMessagePointer < messageLedger.length) {
+            messageLedger[trackingMessagePointer++] = fullyFormedMessage;
+        } else {
+            System.err.println(">> System Ledger Overflow. Dropping incoming packets.");
         }
-        System.out.println("==============================================\n");
+    }
+
+    public void renderSystemDiagnostics() {
+        System.out.println("\n=========================================================================================");
+        System.out.println("  SYSTEM DIAGNOSTICS LOG FEED: " + localizedNamespace.toUpperCase());
+        System.out.println("=========================================================================================");
+        for (int i = 0; i < trackingMessagePointer; i++) {
+            messageLedger[i].compileOutputLog();
+        }
+        System.out.println("=========================================================================================\n");
     }
 }
 
+// ==========================================
+// 4. MAIN IMPLEMENTATION ARCHITECTURE
+// ==========================================
+
 public class ChatApp {
     public static void main(String[] args) {
-        // Create server instance
-        ChatRoom devSquad = new ChatRoom("Dev Squad HQ", 50, 10);
+        // Initialize Core Management Engine
+        ChatRoomManager corporateCluster = new ChatRoomManager("Enterprise Alpha Infrastructure", 100, 10);
 
-        // Instantiating users with different Privilege Roles
-        User adminUser = new User("Alice", Role.ADMIN);
-        User modUser = new User("Bob", Role.MODERATOR);
-        User regularUser1 = new User("Charlie", Role.REGULAR);
-        User regularUser2 = new User("David", Role.REGULAR);
+        // Instantiate Corporate Structural Users
+        UserProfile headAdmin = new UserProfile("Alice_CEO", UserRole.SERVER_ADMINISTRATOR);
+        UserProfile supervisor = new UserProfile("Bob_Manager", UserRole.COMMUNITY_MODERATOR);
+        UserProfile developer1 = new UserProfile("Charlie_Dev", UserRole.STANDARD_USER);
+        UserProfile developer2 = new UserProfile("David_Intern", UserRole.STANDARD_USER);
 
-        // Registering network profiles
-        devSquad.registerUser(adminUser);
-        devSquad.registerUser(modUser);
-        devSquad.registerUser(regularUser1);
-        devSquad.registerUser(regularUser2);
+        // Map Node Users to Secure Service Array System
+        corporateCluster.onboardNewClient(headAdmin);
+        corporateCluster.onboardNewClient(supervisor);
+        corporateCluster.onboardNewClient(developer1);
+        corporateCluster.onboardNewClient(developer2);
 
-        // 1. Regular Chat flow
-        devSquad.sendPublicMessage(regularUser1, "Hey team! Is the server deployment up?");
-        devSquad.sendPublicMessage(modUser, "Yes Charlie, production pipeline looks stable.");
+        System.out.println("\n--- SIMULATION COMMENCING ---\n");
 
-        // 2. Testing Direct Messaging (DMs)
-        devSquad.sendDirectMessage(regularUser1, "David", "Hey bro, check your email for the secret credentials.");
-        devSquad.sendDirectMessage(regularUser2, "Charlie", "Got it, thanks!");
+        try {
+            // Execution Step 1: Baseline Communication Processing
+            corporateCluster.dispatchGlobalBroadcast(developer1, "Deploying version 4.2.0 production hotfix live now.");
+            corporateCluster.dispatchDirectPayload(developer1, "Bob_Manager", "Can you review the AWS CloudWatch logs for trace errors?");
+            corporateCluster.dispatchDirectPayload(supervisor, "Charlie_Dev", "On it. Logs look clean from my end.");
 
-        // 3. Toxic behavior / Moderation simulation
-        devSquad.sendPublicMessage(regularUser2, "I am going to post malicious links here!");
-        
-        // Admin steps in and issues a ban command
-        devSquad.moderationKick(adminUser, "David");
+            // Execution Step 2: Policy Infraction & Threat Containment Scenario
+            corporateCluster.dispatchGlobalBroadcast(developer2, "Click here to download free memory ram! Totally safe link!");
+            
+            // Administrative Sanction applied to contain infrastructure node risk
+            corporateCluster.invokeAdministrativeSanction(headAdmin, "David_Intern");
 
-        // Failsafe checks: Banned user tries to converse again
-        devSquad.sendPublicMessage(regularUser2, "Let me try typing again..."); 
+            // Execution Step 3: Proving Fault-Tolerance & Exception Catching
+            System.out.println("\n[SIMULATING MALICIOUS ACTION RETRY]");
+            corporateCluster.dispatchGlobalBroadcast(developer2, "Can I please bypass your network barrier?");
 
-        // 4. Output the definitive centralized chat engine log
-        devSquad.displayChatHistory();
+        } catch (ChatEngineException operationalFailureDiagnostics) {
+            // Safely intercepts runtime errors cleanly, ensuring core systems don't experience crashes
+            System.out.println(operationalFailureDiagnostics.getMessage());
+        }
+
+        // Output complete transaction chain records cleanly
+        corporateCluster.renderSystemDiagnostics();
     }
 }
